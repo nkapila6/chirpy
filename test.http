@@ -1,0 +1,29 @@
+@baseurl = http://localhost:8080
+
+### Check app endpoint
+GET {{baseurl}}/app/
+
+### health
+GET {{baseurl}}/api/healthz
+
+### fetch times resetted
+GET {{baseurl}}/admin/metrics
+
+### make reset
+POST {{baseurl}}/admin/reset
+
+### validate_chirp
+POST {{baseurl}}/api/validate_chirp
+Content-Type: application/json
+
+{
+    "body": "hi"
+}
+
+### validate_chirp FAIL
+POST {{baseurl}}/api/validate_chirp
+Content-Type: application/json
+
+{
+    "body": "hi"
+}
