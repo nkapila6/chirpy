@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync/atomic"
 )
 
@@ -82,10 +83,22 @@ func main() {
 			return
 		}
 
+		words := []string{"kerfuffle", "sharbert", "fornax"}
+		body := strings.Split(req.Body, " ")
+		for i, w := range body {
+			for _, bad := range words {
+				if strings.ToLower(w) == bad {
+					body[i] = "****"
+				}
+			}
+		}
+		nbody := strings.Join(body, " ")
+
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(struct {
-			Valid bool `json:"valid"`
-		}{true})
+			Body string `json:"cleaned_body"`
+			// Valid bool `json:"valid"`
+		}{nbody})
 	})
 
 	server := http.Server{
