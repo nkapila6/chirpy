@@ -67,11 +67,12 @@ func (apiCfg *apiConfig) admin_reset(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(fmt.Sprintf("Resetted: %d", apiCfg.fileserverHits.Load())))
 }
 
-func validate_chirp(w http.ResponseWriter, r *http.Request) {
+func createChirp(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	req := struct {
-		Body string `json:"body"`
+		Body   string    `json:"body"`
+		UserID uuid.UUID `json:"user_id"`
 	}{}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -104,11 +105,25 @@ func validate_chirp(w http.ResponseWriter, r *http.Request) {
 	}
 	nbody := strings.Join(body, " ")
 
-	w.WriteHeader(http.StatusOK)
+	user, err := queries.CreateChirp(r.Context(), mydb.CreateChirpParams{Body: nbody, UserID: req.UserID})
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(struct {
-		Body string `json:"cleaned_body"`
-		// Valid bool `json:"valid"`
-	}{nbody})
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Body      string    `json:"body"`
+		UserID    uuid.UUID `json:"user_id"`
+	}{user.ID, user.CreatedAt, user.UpdatedAt, user.Body, user.UserID})
+
+	// json.NewEncoder(w).Encode(struct {
+	// 	Body string `json:"cleaned_body"`
+	// 	// Valid bool `json:"valid"`
+	// }{nbody})
 }
 
 func createUser(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
@@ -174,9 +189,12 @@ func main() {
 	mux.HandleFunc("GET /admin/metrics", apiCfg.admin_metrics)
 
 	mux.HandleFunc("POST /admin/reset", apiCfg.admin_reset)
-	mux.HandleFunc("POST /api/validate_chirp", validate_chirp)
+	// mux.HandleFunc("POST /api/validate_chirp", validate_chirp)
 	mux.HandleFunc("POST /api/users", func(w http.ResponseWriter, r *http.Request) {
 		createUser(*dbQueries, w, r)
+	})
+	mux.HandleFunc("POST /api/chirps", func(w http.ResponseWriter, r *http.Request) {
+		createChirp(*dbQueries, w, r)
 	})
 
 	server := http.Server{
