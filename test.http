@@ -25,5 +25,13 @@ POST {{baseurl}}/api/validate_chirp
 Content-Type: application/json
 
 {
-    "body": "hi"
+    "body": "This is an opinion I need to share with the world."
+}
+
+### make email
+POST {{baseurl}}/api/users
+Content-Type: application/json
+
+{
+    "email": "newuser@email.com"
 }

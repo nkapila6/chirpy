@@ -9,7 +9,9 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
+	"github.com/google/uuid"
 	godotenv "github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	mydb "github.com/nkapila6/chirpy/internal/database"
@@ -18,6 +20,13 @@ import (
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	Queries        mydb.Queries
+}
+
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -102,11 +111,48 @@ func validate_chirp(w http.ResponseWriter, r *http.Request) {
 	}{nbody})
 }
 
+func createUser(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
+	// Add a new endpoint to your server, POST /api/users, which allows users to be created. It accepts an email as JSON in the request body and returns the user's ID, email, and timestamps in the response body.
+
+	// read into struct
+	user := User{}
+	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+
+		json.NewEncoder(w).Encode(struct {
+			Error string `json:"error"`
+		}{"Something went wrong"})
+		return
+	}
+
+	user1, err := queries.CreateUser(r.Context(), user.Email)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Println(user1)
+
+	w.Header().Add("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(struct {
+		ID        uuid.UUID `json:"id"`
+		Email     string    `json:"email"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+	}{user1.ID, user1.Email, user1.CreatedAt, user1.UpdatedAt})
+
+}
+
 func main() {
 	godotenv.Load()
 
 	dbURL := os.Getenv("DB_URL")
 	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatal("could not open db: ", err)
+	}
 	if err := db.Ping(); err != nil {
 		log.Fatal("could not connect to db: ", err)
 	}
@@ -129,6 +175,9 @@ func main() {
 
 	mux.HandleFunc("POST /admin/reset", apiCfg.admin_reset)
 	mux.HandleFunc("POST /api/validate_chirp", validate_chirp)
+	mux.HandleFunc("POST /api/users", func(w http.ResponseWriter, r *http.Request) {
+		createUser(*dbQueries, w, r)
+	})
 
 	server := http.Server{
 		Addr:    ":8080",
