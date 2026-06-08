@@ -11,3 +11,6 @@ RETURNING *;
 
 -- name: DeleteUsers :exec
 TRUNCATE users CASCADE;
+
+-- name: RetrieveHash :one
+SELECT * from users where email = $1;

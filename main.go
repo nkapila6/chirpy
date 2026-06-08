@@ -15,6 +15,7 @@ import (
 	godotenv "github.com/joho/godotenv"
 	"github.com/lib/pq"
 	_ "github.com/lib/pq"
+	auth "github.com/nkapila6/chirpy/internal/auth"
 	mydb "github.com/nkapila6/chirpy/internal/database"
 )
 
@@ -28,6 +29,7 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+	Password  string    `json:"password"`
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -68,7 +70,7 @@ func (apiCfg *apiConfig) admin_reset(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(fmt.Sprintf("Resetted: %d", apiCfg.fileserverHits.Load())))
 }
 
-func createChirp(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
+func CreateChirp(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	req := struct {
@@ -127,7 +129,7 @@ func createChirp(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
 	// }{nbody})
 }
 
-func createUser(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
+func CreateUser(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
 	// Add a new endpoint to your server, POST /api/users, which allows users to be created. It accepts an email as JSON in the request body and returns the user's ID, email, and timestamps in the response body.
 
 	// read into struct
@@ -142,7 +144,25 @@ func createUser(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user1, err := queries.CreateUser(r.Context(), user.Email)
+	if user.Password == "" {
+		w.WriteHeader(http.StatusPartialContent)
+		json.NewEncoder(w).Encode(struct {
+			Error string `json:"error"`
+		}{"Password missing"})
+		return
+	}
+
+	HashedPassword, err := auth.HashPassword(user.Password)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(struct {
+			Error string `json:"error"`
+		}{"Something went wrong"})
+		return
+	}
+
+	user1, err := queries.CreateUser(r.Context(), mydb.CreateUserParams{Email: user.Email, HashedPassword: HashedPassword})
 	if err != nil {
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
 			w.WriteHeader(http.StatusConflict)
@@ -241,6 +261,62 @@ func ResetDB(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func Login(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// serialize json into struct
+	request := User{}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(struct {
+			Error string `json:"error"`
+			Err   string `json:"error_message"`
+		}{"Bad request", err.Error()})
+		return
+	}
+
+	// create query
+	dbUser, err := queries.RetrieveHash(r.Context(), request.Email)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(struct {
+			Error string `json:"error"`
+			Err   string `json:"error_message"`
+		}{"Email does not exist", err.Error()})
+		return
+	}
+
+	confirmed, err := auth.CheckPasswordHash(request.Password, dbUser.HashedPassword)
+	if err != nil || !confirmed {
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(struct {
+				Error string `json:"error"`
+				Err   string `json:"error_message"`
+			}{"Hash check failed", err.Error()})
+		}
+
+		if !confirmed {
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(struct {
+				Error string `json:"error"`
+				Err   string `json:"error_message"`
+			}{"Hash check failed", "Cannot confirm the hash"})
+		}
+
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(struct {
+		Id        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Email     string    `json:"email"`
+	}{dbUser.ID, dbUser.CreatedAt, dbUser.UpdatedAt, dbUser.Email})
+
+}
+
 func main() {
 	godotenv.Load()
 
@@ -283,10 +359,13 @@ func main() {
 
 	// mux.HandleFunc("POST /api/validate_chirp", validate_chirp)
 	mux.HandleFunc("POST /api/users", func(w http.ResponseWriter, r *http.Request) {
-		createUser(*dbQueries, w, r)
+		CreateUser(*dbQueries, w, r)
 	})
 	mux.HandleFunc("POST /api/chirps", func(w http.ResponseWriter, r *http.Request) {
-		createChirp(*dbQueries, w, r)
+		CreateChirp(*dbQueries, w, r)
+	})
+	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
+		Login(*dbQueries, w, r)
 	})
 
 	server := http.Server{
