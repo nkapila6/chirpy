@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	godotenv "github.com/joho/godotenv"
+	"github.com/lib/pq"
 	_ "github.com/lib/pq"
 	mydb "github.com/nkapila6/chirpy/internal/database"
 )
@@ -143,6 +144,12 @@ func createUser(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
 
 	user1, err := queries.CreateUser(r.Context(), user.Email)
 	if err != nil {
+		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(struct {
+				Error string `json:"error"`
+			}{"Email already exists"})
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -158,6 +165,37 @@ func createUser(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
 		UpdatedAt time.Time `json:"updated_at"`
 	}{user1.ID, user1.Email, user1.CreatedAt, user1.UpdatedAt})
 
+}
+
+func GetChirps(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
+	// get the chirps from the query
+	chirps, err := queries.GetChirpsAsc(r.Context())
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	type chirpResponse struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Body      string    `json:"body"`
+		UserID    uuid.UUID `json:"user_id"`
+	}
+
+	resp := make([]chirpResponse, len(chirps))
+	for i, c := range chirps {
+		resp[i] = chirpResponse{
+			ID:        c.ID,
+			CreatedAt: c.CreatedAt,
+			UpdatedAt: c.UpdatedAt,
+			Body:      c.Body,
+			UserID:    c.UserID,
+		}
+	}
+	w.Header().Add("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
 }
 
 func main() {
@@ -187,6 +225,13 @@ func main() {
 
 	mux.HandleFunc("GET /api/healthz", healthz)
 	mux.HandleFunc("GET /admin/metrics", apiCfg.admin_metrics)
+	mux.HandleFunc("GET /api/chirps", func(w http.ResponseWriter, r *http.Request) {
+		GetChirps(*dbQueries, w, r)
+	})
+	mux.HandleFunc("GET /api/chirps/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		GetChirpByID(*dbQueries, id, w, r)
+	})
 
 	mux.HandleFunc("POST /admin/reset", apiCfg.admin_reset)
 	// mux.HandleFunc("POST /api/validate_chirp", validate_chirp)
