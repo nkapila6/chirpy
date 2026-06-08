@@ -198,6 +198,49 @@ func GetChirps(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+func GetChirpByID(queries mydb.Queries, id string, w http.ResponseWriter, r *http.Request) {
+	_uuid, err := uuid.Parse(id)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(struct {
+			Error string `json:"error"`
+		}{"Invalid ID"})
+		return
+	}
+
+	chirp, err := queries.GetChirpById(r.Context(), _uuid)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(struct {
+			Error string `json:"error"`
+		}{"Chirp not found"})
+		return
+	}
+
+	w.Header().Add("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Body      string    `json:"body"`
+		UserID    uuid.UUID `json:"user_id"`
+	}{chirp.ID, chirp.CreatedAt, chirp.UpdatedAt, chirp.Body, chirp.UserID})
+}
+
+func ResetDB(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
+	if err := queries.DeleteUsers(r.Context()); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(struct {
+			Error  string `json:"error"`
+			Error1 string `json:"error1"`
+		}{"Failed to reset DB", err.Error()})
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
 func main() {
 	godotenv.Load()
 
@@ -233,7 +276,11 @@ func main() {
 		GetChirpByID(*dbQueries, id, w, r)
 	})
 
-	mux.HandleFunc("POST /admin/reset", apiCfg.admin_reset)
+	// mux.HandleFunc("POST /admin/reset", apiCfg.admin_reset)
+	mux.HandleFunc("POST /admin/reset", func(w http.ResponseWriter, r *http.Request) {
+		ResetDB(*dbQueries, w, r)
+	})
+
 	// mux.HandleFunc("POST /api/validate_chirp", validate_chirp)
 	mux.HandleFunc("POST /api/users", func(w http.ResponseWriter, r *http.Request) {
 		createUser(*dbQueries, w, r)
