@@ -22,14 +22,16 @@ import (
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	Queries        mydb.Queries
+	Secret         string
 }
 
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
-	Password  string    `json:"password"`
+	ID           uuid.UUID `json:"id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	Email        string    `json:"email"`
+	Password     string    `json:"password"`
+	ExpiresInSec int       `json:"expires_in_seconds"`
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -261,7 +263,7 @@ func ResetDB(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func Login(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
+func Login(queries mydb.Queries, secret string, w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	// serialize json into struct
@@ -273,6 +275,11 @@ func Login(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
 			Err   string `json:"error_message"`
 		}{"Bad request", err.Error()})
 		return
+	}
+
+	// if no expires in seconds then use default
+	if request.ExpiresInSec == 0 || request.ExpiresInSec > 3600 {
+		request.ExpiresInSec = 3600
 	}
 
 	// create query
@@ -303,6 +310,24 @@ func Login(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
 				Err   string `json:"error_message"`
 			}{"Hash check failed", "Cannot confirm the hash"})
 		}
+
+		// make jwt
+		token, err := auth.MakeJWT(dbUser.ID, secret, time.Duration(request.ExpiresInSec)*time.Second)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(struct {
+				Error string `json:"error"`
+			}{"cannot create token"})
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(struct {
+			Id        uuid.UUID `json:"id"`
+			CreatedAt time.Time `json:"created_at"`
+			UpdatedAt time.Time `json:"updated_at"`
+			Email     string    `json:"email"`
+			Token     string    `json:"token"`
+		}{dbUser.ID, dbUser.CreatedAt, dbUser.UpdatedAt, dbUser.Email, token})
 
 		return
 	}
@@ -336,6 +361,7 @@ func main() {
 	apiCfg := apiConfig{
 		fileserverHits: atomic.Int32{},
 		Queries:        *dbQueries,
+		Secret:         os.Getenv("SECRET_KEY"),
 	}
 
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(
@@ -365,7 +391,7 @@ func main() {
 		CreateChirp(*dbQueries, w, r)
 	})
 	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
-		Login(*dbQueries, w, r)
+		Login(*dbQueries, apiCfg.Secret, w, r)
 	})
 
 	server := http.Server{
