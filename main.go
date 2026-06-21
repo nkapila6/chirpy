@@ -72,18 +72,30 @@ func (apiCfg *apiConfig) admin_reset(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(fmt.Sprintf("Resetted: %d", apiCfg.fileserverHits.Load())))
 }
 
-func CreateChirp(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
+func CreateChirp(queries mydb.Queries, secret string, w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
+	// auth
+	tokenStr, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	userID, err := auth.ValidateJWT(tokenStr, secret)
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
 	req := struct {
-		Body   string    `json:"body"`
-		UserID uuid.UUID `json:"user_id"`
+		Body string `json:"body"`
+		// UserID uuid.UUID `json:"user_id"`
 	}{}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-
 		json.NewEncoder(w).Encode(struct {
 			Error string `json:"error"`
 		}{"Something went wrong"})
@@ -110,7 +122,7 @@ func CreateChirp(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
 	}
 	nbody := strings.Join(body, " ")
 
-	user, err := queries.CreateChirp(r.Context(), mydb.CreateChirpParams{Body: nbody, UserID: req.UserID})
+	user, err := queries.CreateChirp(r.Context(), mydb.CreateChirpParams{Body: nbody, UserID: userID})
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -124,11 +136,6 @@ func CreateChirp(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
 		Body      string    `json:"body"`
 		UserID    uuid.UUID `json:"user_id"`
 	}{user.ID, user.CreatedAt, user.UpdatedAt, user.Body, user.UserID})
-
-	// json.NewEncoder(w).Encode(struct {
-	// 	Body string `json:"cleaned_body"`
-	// 	// Valid bool `json:"valid"`
-	// }{nbody})
 }
 
 func CreateUser(queries mydb.Queries, w http.ResponseWriter, r *http.Request) {
@@ -295,42 +302,34 @@ func Login(queries mydb.Queries, secret string, w http.ResponseWriter, r *http.R
 
 	confirmed, err := auth.CheckPasswordHash(request.Password, dbUser.HashedPassword)
 	if err != nil || !confirmed {
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(struct {
-				Error string `json:"error"`
-				Err   string `json:"error_message"`
-			}{"Hash check failed", err.Error()})
-		}
-
-		if !confirmed {
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(struct {
-				Error string `json:"error"`
-				Err   string `json:"error_message"`
-			}{"Hash check failed", "Cannot confirm the hash"})
-		}
-
-		// make jwt
-		token, err := auth.MakeJWT(dbUser.ID, secret, time.Duration(request.ExpiresInSec)*time.Second)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(struct {
-				Error string `json:"error"`
-			}{"cannot create token"})
-		}
-
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(http.StatusUnauthorized)
 		json.NewEncoder(w).Encode(struct {
-			Id        uuid.UUID `json:"id"`
-			CreatedAt time.Time `json:"created_at"`
-			UpdatedAt time.Time `json:"updated_at"`
-			Email     string    `json:"email"`
-			Token     string    `json:"token"`
-		}{dbUser.ID, dbUser.CreatedAt, dbUser.UpdatedAt, dbUser.Email, token})
-
+			Error string `json:"error"`
+			Err   string `json:"error_message"`
+		}{"incorret email or pass", err.Error()})
 		return
 	}
+
+	// make jwt
+	token, err := auth.MakeJWT(dbUser.ID, secret, time.Duration(request.ExpiresInSec)*time.Second)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(struct {
+			Error string `json:"error"`
+		}{"cannot create token"})
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(struct {
+		Id        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Email     string    `json:"email"`
+		Token     string    `json:"token"`
+	}{dbUser.ID, dbUser.CreatedAt, dbUser.UpdatedAt, dbUser.Email, token})
+
+	return
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(struct {
@@ -388,7 +387,7 @@ func main() {
 		CreateUser(*dbQueries, w, r)
 	})
 	mux.HandleFunc("POST /api/chirps", func(w http.ResponseWriter, r *http.Request) {
-		CreateChirp(*dbQueries, w, r)
+		CreateChirp(*dbQueries, apiCfg.Secret, w, r)
 	})
 	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
 		Login(*dbQueries, apiCfg.Secret, w, r)
